@@ -32,13 +32,15 @@ for i in $RPMDIR $SRCDIR $SPECDIR $SRPMDIR $BUILDDIR ; do
 	[ ! -d "$i" ] && mkdir -p "$i"
 done
 
-cd "${SCRIPT_PATH}/minio" || exit 1
+PROJECT=$1
+
+cd "${SCRIPT_PATH}/${PROJECT}" || exit 1
 
 SOURCES=("minio.service")
 for SOURCE in "${SOURCES[@]}" ; do
     cp -v "${SCRIPT_PATH}/${SOURCE}" "${SRCDIR}/"
 done
 
-spectool -g -C "${SRCDIR}" ../minio.spec
+spectool -g -C "${SRCDIR}" ../"${PROJECT}.spec"
 
-rpmbuild --define "_topdir ${SCRATCH}/rpmbuild" --define "_rpmdir ${RPMDIR}" -bb "${SCRIPT_PATH}/minio.spec"
+rpmbuild --define "_topdir ${SCRATCH}/rpmbuild" --define "_rpmdir ${RPMDIR}" -bb "${SCRIPT_PATH}/${PROJECT}.spec"
