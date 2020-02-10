@@ -9,6 +9,8 @@
 
 %define use_systemd (0%{?fedora} && 0%{?fedora} >= 18) || (0%{?rhel} && 0%{?rhel} >= 7) || (0%{?suse_version} && 0%{?suse_version} >=1210)
 
+%define goprefix github.com/minio/minio
+
 Summary:        Cloud Storage Server.
 Name:           minio
 Version:        %{gitver}
@@ -45,13 +47,7 @@ range from a few KBs to a maximum of 5TiB.
 # setup flags like 'go run buildscripts/gen-ldflags.go' would do
 scommitid=$(echo %{commitid} | cut -c1-12)
 
-LDFLAGS="
--X $prefix.Version=%{version}-%{gitrel}
--X $prefix.ReleaseTag=%{gittag}
--X $prefix.CommitID=%{commitid}
--X $prefix.ShortCommitID=$scommitid
-"
-make
+GO111MODULE=on CGO_ENABLED=0 go build -tags kqueue --ldflags "-s -w -X %{goprefix}/cmd.Version=%{version}-%{gitrel} -X %{goprefix}/cmd.ReleaseTag=%{gittag} -X %{goprefix}/cmd.CommitID=%{commitid} -X %{goprefix}/cmd.ShortCommitID=$scommitid" -o %{name}
 
 %{__cat} <<'EOF' > "%{_builddir}/%{?buildsubdir}/%{name}.sysconf"
 # Remote volumes to be used for Minio server.
