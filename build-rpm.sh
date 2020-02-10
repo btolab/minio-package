@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -o pipefail -o errtrace -o errexit -o nounset -o functrace
+shopt -s nullglob
 
 traperror() {
     local el=${1:=??} ec=${2:=??} lc="$BASH_COMMAND"
@@ -43,4 +44,16 @@ done
 
 spectool -g -C "${SRCDIR}" ../"${PROJECT}.spec"
 
-rpmbuild --define "_topdir ${SCRATCH}/rpmbuild" --define "_rpmdir ${RPMDIR}" -bb "${SCRIPT_PATH}/${PROJECT}.spec"
+cp ../"${PROJECT}.spec" "${SCRATCH}"/rpm.spec
+
+X=0
+for PATCH in ../patches/"${PROJECT}"/*.patch ; do
+    cp "${PATCH}" "${SRCDIR}/"
+    PL="Patch10${X}: $(basename "${PATCH}")"
+    PA="%patch -P 10${X} -p1"
+    sed -i -e "/^Source0/a ${PL}" "${SCRATCH}"/rpm.spec
+    sed -i -e "/^%setup /a ${PA}" "${SCRATCH}"/rpm.spec
+    X=$((X+1))
+done
+
+rpmbuild --define "_topdir ${SCRATCH}/rpmbuild" --define "_rpmdir ${RPMDIR}" -bb "${SCRATCH}/rpm.spec"

@@ -36,7 +36,7 @@ cloud storage service (AWS Signature v2 and v4).
 # setup flags like 'go run buildscripts/gen-ldflags.go' would do
 scommitid=$(echo %{commitid} | cut -c1-12)
 
-GO111MODULE=on CGO_ENABLED=0 VERSION=%{version}-%{gitrel} go build -tags kqueue --ldflags "-s -w -X %{goprefix}/cmd.Version=%{version}-%{gitrel} -X %{goprefix}/cmd.ReleaseTag=%{gittag} -X %{goprefix}/cmd.CommitID=%{commitid} -X %{goprefix}/cmd.ShortCommitID=$scommitid" -o mc
+GO111MODULE=on CGO_ENABLED=0 go build -tags kqueue --ldflags "-s -w -X %{goprefix}/cmd.Version=%{version}-%{gitrel} -X %{goprefix}/cmd.ReleaseTag=%{gittag} -X %{goprefix}/cmd.CommitID=%{commitid} -X %{goprefix}/cmd.ShortCommitID=$scommitid" -o mc
 
 %install
 rm -rf %{buildroot}

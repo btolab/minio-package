@@ -1,0 +1,342 @@
+From 8d947843b9ba6fa44bba9e53122fe8c11566b523 Mon Sep 17 00:00:00 2001
+From: Jeffrey Clark <jclark@nmi.com>
+Date: Mon, 10 Feb 2020 10:06:41 +0000
+Subject: [PATCH] accept keys using prompt and/or standard input
+
+---
+ cmd/admin-user-add.go               | 57 ++++++++++++++++++++++++++---
+ cmd/config-host-add.go              | 71 ++++++++++++++++++++++++++++++-------
+ docs/minio-admin-complete-guide.md  | 27 +++++++++++++-
+ docs/minio-client-complete-guide.md | 19 ++++++++--
+ go.mod                              |  1 +
+ 5 files changed, 154 insertions(+), 21 deletions(-)
+
+diff --git a/cmd/admin-user-add.go b/cmd/admin-user-add.go
+index d3c5e90f..4860fdcd 100644
+--- a/cmd/admin-user-add.go
++++ b/cmd/admin-user-add.go
+@@ -17,7 +17,9 @@
+ package cmd
+ 
+ import (
++	"bufio"
+ 	"fmt"
++	"os"
+ 	"strings"
+ 
+ 	"github.com/fatih/color"
+@@ -25,6 +27,7 @@ import (
+ 	json "github.com/minio/mc/pkg/colorjson"
+ 	"github.com/minio/mc/pkg/probe"
+ 	"github.com/minio/minio/pkg/console"
++	"golang.org/x/crypto/ssh/terminal"
+ )
+ 
+ var adminUserAddCmd = cli.Command{
+@@ -53,13 +56,19 @@ EXAMPLES:
+      {{.DisableHistory}}
+      {{.Prompt}} {{.HelpName}} myminio foobar foo12345
+      {{.EnableHistory}}
++  2. Add a new user 'testuser' to MinIO server.
++     {{.Prompt}} {{.HelpName}} myminio
++        Enter Access Key : testuser
++        Enter Secret Key : testuser123
+ `,
+ }
+ 
+ // checkAdminUserAddSyntax - validate all the passed arguments
+ func checkAdminUserAddSyntax(ctx *cli.Context) {
+-	if len(ctx.Args()) != 3 {
+-		cli.ShowCommandHelpAndExit(ctx, "add", 1) // last argument is exit code
++	argsNr := len(ctx.Args())
++	if argsNr > 3 || argsNr < 1 {
++		fatalIf(errInvalidArgument().Trace(ctx.Args().Tail()...),
++			"Incorrect number of arguments for user add command.")
+ 	}
+ }
+ 
+@@ -115,6 +124,43 @@ func (u userMessage) JSON() string {
+ 	return string(jsonMessageBytes)
+ }
+ 
++// fetchUserKeys - returns the access and secret key
++func fetchUserKeys(args cli.Args) (string, string) {
++	accessKey := ""
++	secretKey := ""
++	console.SetColor(cred, color.New(color.FgYellow, color.Italic))
++	isTerminal := terminal.IsTerminal(int(os.Stdin.Fd()))
++	reader := bufio.NewReader(os.Stdin)
++
++	argCount := len(args)
++
++	if argCount == 1 {
++		if isTerminal {
++			fmt.Printf("%s", console.Colorize(cred, "Enter Access Key: "))
++		}
++		value, _, _ := reader.ReadLine()
++		accessKey = string(value)
++	} else {
++		accessKey = args.Get(1)
++	}
++
++	if argCount >= 1 && argCount <= 2 {
++		if isTerminal {
++			fmt.Printf("%s", console.Colorize(cred, "Enter Secret Key: "))
++			bytePassword, _ := terminal.ReadPassword(int(os.Stdin.Fd()))
++			fmt.Printf("\n")
++			secretKey = string(bytePassword)
++		} else {
++			value, _, _ := reader.ReadLine()
++			secretKey = string(value)
++		}
++	} else {
++		secretKey = args.Get(2)
++	}
++
++	return accessKey, secretKey
++}
++
+ // mainAdminUserAdd is the handle for "mc admin user add" command.
+ func mainAdminUserAdd(ctx *cli.Context) error {
+ 	checkAdminUserAddSyntax(ctx)
+@@ -124,17 +170,18 @@ func mainAdminUserAdd(ctx *cli.Context) error {
+ 	// Get the alias parameter from cli
+ 	args := ctx.Args()
+ 	aliasedURL := args.Get(0)
++	accessKey, secretKey := fetchUserKeys(args)
+ 
+ 	// Create a new MinIO Admin Client
+ 	client, err := newAdminClient(aliasedURL)
+ 	fatalIf(err, "Unable to initialize admin connection.")
+ 
+-	fatalIf(probe.NewError(client.AddUser(args.Get(1), args.Get(2))).Trace(args...), "Cannot add new user")
++	fatalIf(probe.NewError(client.AddUser(accessKey, secretKey)).Trace(args...), "Cannot add new user")
+ 
+ 	printMsg(userMessage{
+ 		op:         "add",
+-		AccessKey:  args.Get(1),
+-		SecretKey:  args.Get(2),
++		AccessKey:  accessKey,
++		SecretKey:  secretKey,
+ 		UserStatus: "enabled",
+ 	})
+ 
+diff --git a/cmd/config-host-add.go b/cmd/config-host-add.go
+index 0a09ab3a..b458dba7 100644
+--- a/cmd/config-host-add.go
++++ b/cmd/config-host-add.go
+@@ -17,15 +17,21 @@
+ package cmd
+ 
+ import (
++	"bufio"
++	"fmt"
+ 	"math/rand"
++	"os"
+ 	"time"
+ 
+ 	"github.com/fatih/color"
+ 	"github.com/minio/cli"
+ 	"github.com/minio/mc/pkg/probe"
+ 	"github.com/minio/minio/pkg/console"
++	"golang.org/x/crypto/ssh/terminal"
+ )
+ 
++const cred = "YellowItalics"
++
+ var hostAddFlags = []cli.Flag{
+ 	cli.StringFlag{
+ 		Name:  "lookup",
+@@ -71,24 +77,27 @@ EXAMPLES:
+      {{.Prompt}} {{.HelpName}} mys3 https://s3.amazonaws.com \
+                  BKIKJAA5BMMU2RHO6IBB V8f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
+      {{.EnableHistory}}
++
++  4. Add Amazon S3 storage service under "mys3" alias. Enter the access, secret key through standard input.
++     {{.Prompt}} {{.HelpName}} mys3 https://s3.amazonaws.com --api "s3v4" --lookup "dns"
++       Enter Access Key : BKIKJAA5BMMU2RHO6IBB
++       Enter Secret Key : V8f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
++
+ `,
+ }
+ 
+ // checkConfigHostAddSyntax - verifies input arguments to 'config host add'.
+-func checkConfigHostAddSyntax(ctx *cli.Context) {
++func checkConfigHostAddSyntax(ctx *cli.Context, accessKey, secretKey, api, bucketLookup string) {
+ 	args := ctx.Args()
+ 	argsNr := len(args)
+-	if argsNr < 4 || argsNr > 5 {
++	if argsNr > 4 || argsNr < 2 {
+ 		fatalIf(errInvalidArgument().Trace(ctx.Args().Tail()...),
+ 			"Incorrect number of arguments for host add command.")
+ 	}
+ 
+ 	alias := args.Get(0)
+ 	url := args.Get(1)
+-	accessKey := args.Get(2)
+-	secretKey := args.Get(3)
+-	api := ctx.String("api")
+-	bucketLookup := ctx.String("lookup")
++
+ 	if !isValidAlias(alias) {
+ 		fatalIf(errInvalidAlias(alias), "Invalid alias.")
+ 	}
+@@ -212,18 +221,54 @@ func buildS3Config(url, accessKey, secretKey, api, lookup string) (*Config, *pro
+ 	return s3Config, nil
+ }
+ 
++// fetchHostKeys - returns the user accessKey and secretKey
++func fetchHostKeys(args cli.Args) (string, string) {
++	accessKey := ""
++	secretKey := ""
++	console.SetColor(cred, color.New(color.FgYellow, color.Italic))
++	isTerminal := terminal.IsTerminal(int(os.Stdin.Fd()))
++	reader := bufio.NewReader(os.Stdin)
++
++	argsNr := len(args)
++
++	if argsNr == 2 {
++		if isTerminal {
++			fmt.Printf("%s", console.Colorize(cred, "Enter Access Key: "))
++		}
++		value, _, _ := reader.ReadLine()
++		accessKey = string(value)
++	} else {
++		accessKey = args.Get(2)
++	}
++
++	if argsNr >= 2 && argsNr <= 3 {
++		if isTerminal {
++			fmt.Printf("%s", console.Colorize(cred, "Enter Secret Key: "))
++			bytePassword, _ := terminal.ReadPassword(int(os.Stdin.Fd()))
++			fmt.Printf("\n")
++			secretKey = string(bytePassword)
++		} else {
++			value, _, _ := reader.ReadLine()
++			secretKey = string(value)
++		}
++	} else {
++		secretKey = args.Get(3)
++	}
++
++	return accessKey, secretKey
++}
++
+ func mainConfigHostAdd(ctx *cli.Context) error {
+-	checkConfigHostAddSyntax(ctx)
+ 
+ 	console.SetColor("HostMessage", color.New(color.FgGreen))
+ 	var (
+-		args      = ctx.Args()
+-		url       = trimTrailingSeparator(args.Get(1))
+-		accessKey = args.Get(2)
+-		secretKey = args.Get(3)
+-		api       = ctx.String("api")
+-		lookup    = ctx.String("lookup")
++		args   = ctx.Args()
++		url    = trimTrailingSeparator(args.Get(1))
++		api    = ctx.String("api")
++		lookup = ctx.String("lookup")
+ 	)
++	accessKey, secretKey := fetchHostKeys(args)
++	checkConfigHostAddSyntax(ctx, accessKey, secretKey, api, lookup)
+ 
+ 	s3Config, err := buildS3Config(url, accessKey, secretKey, api, lookup)
+ 	fatalIf(err.Trace(ctx.Args()...), "Unable to initialize new config from the provided credentials.")
+diff --git a/docs/minio-admin-complete-guide.md b/docs/minio-admin-complete-guide.md
+index 773d5a65..95ba89a9 100644
+--- a/docs/minio-admin-complete-guide.md
++++ b/docs/minio-admin-complete-guide.md
+@@ -98,6 +98,19 @@ MinIO server displays URL, access and secret keys.
+ 
+ #### Usage
+ 
++```sh
++mc config host add <ALIAS> <YOUR-MINIO-ENDPOINT>
++```
++
++This asks for access key and secret key which are supplied by your MinIo service.
++
++```sh
++Enter Access Key : BKIKJAA5BMMU2RHO6IBB
++Enter Secret Key : V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
++```
++
++Host can also be added by passing access key, secret key using prompt
++
+ ```
+ mc config host add <ALIAS> <YOUR-MINIO-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY>
+ ```
+@@ -427,7 +440,19 @@ COMMANDS:
+ *Example: Add a new user 'newuser' on MinIO.*
+ 
+ ```
+-mc admin user add myminio/ newuser newuser123
++
++*Example: Add a new user 'testuser' on MinIO, using standard input.*
++
++```sh
++$ {{.HelpName}} myminio
++   Enter Access Key : testuser
++   Enter Secret Key : testuser123
++```
++
++*Example: Change policy for a user 'newuser' on MinIO to 'writeonly' policy.*
++
++```sh
++mc admin user policy myminio/ newuser writeonly
+ ```
+ 
+ *Example: Disable a user 'newuser' on MinIO.*
+diff --git a/docs/minio-client-complete-guide.md b/docs/minio-client-complete-guide.md
+index 07afe834..a6bc0074 100644
+--- a/docs/minio-client-complete-guide.md
++++ b/docs/minio-client-complete-guide.md
+@@ -118,8 +118,12 @@ To add one or more Amazon S3 compatible hosts, please follow the instructions be
+ 
+ #### Usage
+ 
+-```
+-mc config host add <ALIAS> <YOUR-S3-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY> <API-SIGNATURE>
++```sh
++1. Add host by passing access key, secret key in command.
++ mc config host add <ALIAS> <YOUR-S3-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY> <API-SIGNATURE>
++
++2. Add host by accepting access key, secret key through standard input
++   mc config host add <ALIAS> <YOUR-S3-ENDPOINT>
+ ```
+ 
+ Alias is simply a short name to your cloud storage service. S3 end-point, access and secret keys are supplied by your cloud storage provider. API signature is an optional argument. By default, it is set to "S3v4".
+@@ -132,6 +136,17 @@ MinIO server displays URL, access and secret keys.
+ mc config host add minio http://192.168.1.51 BKIKJAA5BMMU2RHO6IBB V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12 --api S3v4
+ ```
+ 
++```sh
++mc config host add minio http://192.168.1.51 --api S3v4
++```
++
++This prompts for details:
++
++```
++Enter Access Key : BKIKJAA5BMMU2RHO6IBB
++Enter Secret Key : V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
++```
++
+ ### Example - Amazon S3 Cloud Storage
+ Get your AccessKeyID and SecretAccessKey by following [AWS Credentials Guide](http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSGettingStartedGuide/AWSCredentials.html).
+ 
+diff --git a/go.mod b/go.mod
+index 644c98a1..0e3fad9d 100644
+--- a/go.mod
++++ b/go.mod
+@@ -24,6 +24,7 @@ require (
+ 	github.com/rjeczalik/notify v0.9.2
+ 	github.com/ugorji/go v1.1.7 // indirect
+ 	go.uber.org/zap v1.11.0 // indirect
++	golang.org/x/crypto v0.0.0-20191117063200-497ca9f6d64f
+ 	golang.org/x/net v0.0.0-20190923162816-aa69164e4478
+ 	golang.org/x/text v0.3.2
+ 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127
+-- 
+2.12.2
+
