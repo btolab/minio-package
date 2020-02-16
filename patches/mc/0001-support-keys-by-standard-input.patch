@@ -1,18 +1,19 @@
-From 8d947843b9ba6fa44bba9e53122fe8c11566b523 Mon Sep 17 00:00:00 2001
+From b6285e71f553b06eef20f1fd4698a0c28b819af2 Mon Sep 17 00:00:00 2001
 From: Jeffrey Clark <jclark@nmi.com>
 Date: Mon, 10 Feb 2020 10:06:41 +0000
-Subject: [PATCH] accept keys using prompt and/or standard input
+Subject: [PATCH 1/2] support keys by standard input
 
+Based on work by @sinhaashish in #2785
 ---
- cmd/admin-user-add.go               | 57 ++++++++++++++++++++++++++---
- cmd/config-host-add.go              | 71 ++++++++++++++++++++++++++++++-------
- docs/minio-admin-complete-guide.md  | 27 +++++++++++++-
- docs/minio-client-complete-guide.md | 19 ++++++++--
- go.mod                              |  1 +
- 5 files changed, 154 insertions(+), 21 deletions(-)
+ cmd/admin-user-add.go               | 61 ++++++++++++++++++++++++++---
+ cmd/config-host-add.go              | 76 ++++++++++++++++++++++++++++++-------
+ docs/minio-admin-complete-guide.md  | 37 ++++++++++++++++--
+ docs/minio-client-complete-guide.md | 21 +++++++++-
+ go.mod                              |  2 +-
+ 5 files changed, 173 insertions(+), 24 deletions(-)
 
 diff --git a/cmd/admin-user-add.go b/cmd/admin-user-add.go
-index d3c5e90f..4860fdcd 100644
+index d3c5e90f..ee5b57e4 100644
 --- a/cmd/admin-user-add.go
 +++ b/cmd/admin-user-add.go
 @@ -17,7 +17,9 @@
@@ -33,14 +34,18 @@ index d3c5e90f..4860fdcd 100644
  )
  
  var adminUserAddCmd = cli.Command{
-@@ -53,13 +56,19 @@ EXAMPLES:
+@@ -53,13 +56,23 @@ EXAMPLES:
       {{.DisableHistory}}
       {{.Prompt}} {{.HelpName}} myminio foobar foo12345
       {{.EnableHistory}}
-+  2. Add a new user 'testuser' to MinIO server.
++  2. Add a new user 'foobar' to MinIO server, prompting for keys.
 +     {{.Prompt}} {{.HelpName}} myminio
-+        Enter Access Key : testuser
-+        Enter Secret Key : testuser123
++     Enter Access Key: foobar
++     Enter Secret Key: foobar12345
++  3. Add a new user 'foobar' to MinIO server using piped keys.
++     {{.DisableHistory}}
++     {{.Prompt}} echo "foobar\nfoobar12345" | {{.HelpName}} myminio
++     {{.EnableHistory}}
  `,
  }
  
@@ -55,7 +60,7 @@ index d3c5e90f..4860fdcd 100644
  	}
  }
  
-@@ -115,6 +124,43 @@ func (u userMessage) JSON() string {
+@@ -115,6 +128,43 @@ func (u userMessage) JSON() string {
  	return string(jsonMessageBytes)
  }
  
@@ -99,7 +104,7 @@ index d3c5e90f..4860fdcd 100644
  // mainAdminUserAdd is the handle for "mc admin user add" command.
  func mainAdminUserAdd(ctx *cli.Context) error {
  	checkAdminUserAddSyntax(ctx)
-@@ -124,17 +170,18 @@ func mainAdminUserAdd(ctx *cli.Context) error {
+@@ -124,17 +174,18 @@ func mainAdminUserAdd(ctx *cli.Context) error {
  	// Get the alias parameter from cli
  	args := ctx.Args()
  	aliasedURL := args.Get(0)
@@ -122,7 +127,7 @@ index d3c5e90f..4860fdcd 100644
  	})
  
 diff --git a/cmd/config-host-add.go b/cmd/config-host-add.go
-index 0a09ab3a..b458dba7 100644
+index 7b482c5c..d45ac5d9 100644
 --- a/cmd/config-host-add.go
 +++ b/cmd/config-host-add.go
 @@ -17,15 +17,21 @@
@@ -147,16 +152,21 @@ index 0a09ab3a..b458dba7 100644
  var hostAddFlags = []cli.Flag{
  	cli.StringFlag{
  		Name:  "lookup",
-@@ -71,24 +77,27 @@ EXAMPLES:
+@@ -71,24 +77,32 @@ EXAMPLES:
       {{.Prompt}} {{.HelpName}} mys3 https://s3.amazonaws.com \
                   BKIKJAA5BMMU2RHO6IBB V8f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
       {{.EnableHistory}}
 +
-+  4. Add Amazon S3 storage service under "mys3" alias. Enter the access, secret key through standard input.
++  4. Add Amazon S3 storage service under "mys3" alias, prompting for keys.
 +     {{.Prompt}} {{.HelpName}} mys3 https://s3.amazonaws.com --api "s3v4" --lookup "dns"
-+       Enter Access Key : BKIKJAA5BMMU2RHO6IBB
-+       Enter Secret Key : V8f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
++     Enter Access Key: BKIKJAA5BMMU2RHO6IBB
++     Enter Secret Key: V8f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
 +
++  5. Add Amazon S3 storage service under "mys3" alias using piped keys.
++     {{.DisableHistory}}
++     {{.Prompt}} echo "BKIKJAA5BMMU2RHO6IBB\nV8f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12" | \
++                 {{.HelpName}} mys3 https://s3.amazonaws.com --api "s3v4" --lookup "dns"
++     {{.EnableHistory}}
  `,
  }
  
@@ -181,7 +191,7 @@ index 0a09ab3a..b458dba7 100644
  	if !isValidAlias(alias) {
  		fatalIf(errInvalidAlias(alias), "Invalid alias.")
  	}
-@@ -212,18 +221,54 @@ func buildS3Config(url, accessKey, secretKey, api, lookup string) (*Config, *pro
+@@ -213,18 +227,54 @@ func buildS3Config(url, accessKey, secretKey, api, lookup string) (*Config, *pro
  	return s3Config, nil
  }
  
@@ -244,99 +254,118 @@ index 0a09ab3a..b458dba7 100644
  	s3Config, err := buildS3Config(url, accessKey, secretKey, api, lookup)
  	fatalIf(err.Trace(ctx.Args()...), "Unable to initialize new config from the provided credentials.")
 diff --git a/docs/minio-admin-complete-guide.md b/docs/minio-admin-complete-guide.md
-index 773d5a65..95ba89a9 100644
+index 773d5a65..50418767 100644
 --- a/docs/minio-admin-complete-guide.md
 +++ b/docs/minio-admin-complete-guide.md
-@@ -98,6 +98,19 @@ MinIO server displays URL, access and secret keys.
- 
+@@ -99,14 +99,35 @@ MinIO server displays URL, access and secret keys.
  #### Usage
  
-+```sh
-+mc config host add <ALIAS> <YOUR-MINIO-ENDPOINT>
-+```
-+
-+This asks for access key and secret key which are supplied by your MinIo service.
-+
-+```sh
-+Enter Access Key : BKIKJAA5BMMU2RHO6IBB
-+Enter Secret Key : V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
-+```
-+
-+Host can also be added by passing access key, secret key using prompt
-+
  ```
- mc config host add <ALIAS> <YOUR-MINIO-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY>
- ```
-@@ -427,7 +440,19 @@ COMMANDS:
- *Example: Add a new user 'newuser' on MinIO.*
- 
- ```
--mc admin user add myminio/ newuser newuser123
-+
-+*Example: Add a new user 'testuser' on MinIO, using standard input.*
-+
-+```sh
-+$ {{.HelpName}} myminio
-+   Enter Access Key : testuser
-+   Enter Secret Key : testuser123
-+```
-+
-+*Example: Change policy for a user 'newuser' on MinIO to 'writeonly' policy.*
-+
-+```sh
-+mc admin user policy myminio/ newuser writeonly
+-mc config host add <ALIAS> <YOUR-MINIO-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY>
++mc config host add <ALIAS> <YOUR-MINIO-ENDPOINT> [YOUR-ACCESS-KEY] [YOUR-SECRET-KEY]
  ```
  
- *Example: Disable a user 'newuser' on MinIO.*
-diff --git a/docs/minio-client-complete-guide.md b/docs/minio-client-complete-guide.md
-index 07afe834..a6bc0074 100644
---- a/docs/minio-client-complete-guide.md
-+++ b/docs/minio-client-complete-guide.md
-@@ -118,8 +118,12 @@ To add one or more Amazon S3 compatible hosts, please follow the instructions be
- 
- #### Usage
++Keys must be supplied by argument or standard input.
++
+ Alias is simply a short name to your MinIO service. MinIO end-point, access and secret keys are supplied by your MinIO service. Admin API uses "S3v4" signature and cannot be changed.
  
 -```
+-mc config host add minio http://192.168.1.51:9000 BKIKJAA5BMMU2RHO6IBB V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
+-```
++### Examples
++
++1. Keys by argument
++
++   ```
++   mc config host add minio http://192.168.1.51:9000 BKIKJAA5BMMU2RHO6IBB V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
++   ```
++
++2. Keys by prompt
++
++   ```
++   mc config host add minio http://192.168.1.51:9000
++   Enter Access Key: BKIKJAA5BMMU2RHO6IBB
++   Enter Secret Key: V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
++   ```
++
++2. Keys by pipe
++
++   ```
++   echo "BKIKJAA5BMMU2RHO6IBB\nV7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12" | \
++       mc config host add minio http://192.168.1.51:9000
++   ```
+ 
+ ## 4. Test Your Setup
+ 
+@@ -430,6 +451,14 @@ COMMANDS:
+ mc admin user add myminio/ newuser newuser123
+ ```
+ 
++*Example: Add a new user 'newuser' on MinIO, using standard input.*
++
++```
++mc admin user add myminio/
++Enter Access Key: newuser
++Enter Secret Key: newuser123
++```
++
+ *Example: Disable a user 'newuser' on MinIO.*
+ 
+ ```
+diff --git a/docs/minio-client-complete-guide.md b/docs/minio-client-complete-guide.md
+index 07afe834..7308a881 100644
+--- a/docs/minio-client-complete-guide.md
++++ b/docs/minio-client-complete-guide.md
+@@ -119,9 +119,11 @@ To add one or more Amazon S3 compatible hosts, please follow the instructions be
+ #### Usage
+ 
+ ```
 -mc config host add <ALIAS> <YOUR-S3-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY> <API-SIGNATURE>
-+```sh
-+1. Add host by passing access key, secret key in command.
-+ mc config host add <ALIAS> <YOUR-S3-ENDPOINT> <YOUR-ACCESS-KEY> <YOUR-SECRET-KEY> <API-SIGNATURE>
-+
-+2. Add host by accepting access key, secret key through standard input
-+   mc config host add <ALIAS> <YOUR-S3-ENDPOINT>
++mc config host add <ALIAS> <YOUR-S3-ENDPOINT> [YOUR-ACCESS-KEY] [YOUR-SECRET-KEY] <API-SIGNATURE>
  ```
  
++Keys must be supplied by argument or standard input.
++
  Alias is simply a short name to your cloud storage service. S3 end-point, access and secret keys are supplied by your cloud storage provider. API signature is an optional argument. By default, it is set to "S3v4".
-@@ -132,6 +136,17 @@ MinIO server displays URL, access and secret keys.
- mc config host add minio http://192.168.1.51 BKIKJAA5BMMU2RHO6IBB V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12 --api S3v4
+ 
+ ### Example - MinIO Cloud Storage
+@@ -146,6 +148,23 @@ Get your AccessKeyID and SecretAccessKey by following [Google Credentials Guide]
+ mc config host add gcs  https://storage.googleapis.com BKIKJAA5BMMU2RHO6IBB V8f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
  ```
  
-+```sh
-+mc config host add minio http://192.168.1.51 --api S3v4
-+```
++### Example - Specify keys using standard input
 +
-+This prompts for details:
++1. Prompt
 +
-+```
-+Enter Access Key : BKIKJAA5BMMU2RHO6IBB
-+Enter Secret Key : V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
-+```
++   ```
++   mc config host add minio http://192.168.1.51 --api S3v4
++   Enter Access Key: BKIKJAA5BMMU2RHO6IBB
++   Enter Secret Key: V7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12
++   ```
 +
- ### Example - Amazon S3 Cloud Storage
- Get your AccessKeyID and SecretAccessKey by following [AWS Credentials Guide](http://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSGettingStartedGuide/AWSCredentials.html).
- 
++2. Pipe
++
++   ```
++   echo "BKIKJAA5BMMU2RHO6IBB\nV7f1CwQqAcwo80UEIJEjc5gVQUSSx5ohQ9GSrr12" | \
++       mc config host add minio http://192.168.1.51 --api S3v4
++   ```
++
+ ### Specify host configuration through environment variable
+ ```
+ export MC_HOST_<alias>=https://<Access Key>:<Secret Key>@<YOUR-S3-ENDPOINT>
 diff --git a/go.mod b/go.mod
-index 644c98a1..0e3fad9d 100644
+index 3fe386dd..8633bee8 100644
 --- a/go.mod
 +++ b/go.mod
-@@ -24,6 +24,7 @@ require (
+@@ -24,7 +24,7 @@ require (
  	github.com/rjeczalik/notify v0.9.2
  	github.com/ugorji/go v1.1.7 // indirect
  	go.uber.org/zap v1.11.0 // indirect
-+	golang.org/x/crypto v0.0.0-20191117063200-497ca9f6d64f
- 	golang.org/x/net v0.0.0-20190923162816-aa69164e4478
+-	golang.org/x/crypto v0.0.0-20200214034016-1d94cc7ab1c6 // indirect
++	golang.org/x/crypto v0.0.0-20200214034016-1d94cc7ab1c6
+ 	golang.org/x/net v0.0.0-20200202094626-16171245cfb2
+ 	golang.org/x/sys v0.0.0-20200212091648-12a6c2dcc1e4 // indirect
  	golang.org/x/text v0.3.2
- 	gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127
 -- 
 2.12.2
 
