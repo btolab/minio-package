@@ -47,8 +47,7 @@ spectool -g -C "${SRCDIR}" ../"${PROJECT}.spec"
 cp ../"${PROJECT}.spec" "${SCRATCH}"/rpm.spec
 
 X=0
-# shellcheck disable=SC2045
-for PATCH in $(ls -r ../patches/"${PROJECT}"/*.patch) ; do
+for PATCH in ../patches/"${PROJECT}"/*.patch ; do
     cp "${PATCH}" "${SRCDIR}/"
     PL="Patch10${X}: $(basename "${PATCH}")"
     PA="%patch -P 10${X} -p1"
